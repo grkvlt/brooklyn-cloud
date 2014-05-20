@@ -16,9 +16,10 @@
 package brooklyn.location.cloud;
 
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,27 +27,23 @@ import org.slf4j.LoggerFactory;
 import brooklyn.config.ConfigKey;
 import brooklyn.entity.Entity;
 import brooklyn.entity.basic.ConfigKeys;
-import brooklyn.entity.basic.Entities;
 import brooklyn.entity.cloud.CloudEnvironment;
 import brooklyn.entity.cloud.CloudMachine;
-import brooklyn.location.Location;
+import brooklyn.entity.cloud.MachineEntity;
 import brooklyn.location.MachineLocation;
 import brooklyn.location.MachineProvisioningLocation;
 import brooklyn.location.NoMachinesAvailableException;
 import brooklyn.location.basic.AbstractLocation;
 import brooklyn.location.basic.LocationConfigKeys;
-import brooklyn.location.basic.Machines;
 import brooklyn.location.basic.SshMachineLocation;
 import brooklyn.location.dynamic.DynamicLocation;
-import brooklyn.util.collections.MutableMap;
 import brooklyn.util.flags.SetFromFlag;
-import brooklyn.util.guava.Maybe;
 
 import com.google.common.base.Objects.ToStringHelper;
-import com.google.common.collect.HashMultimap;
+import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
-import com.google.common.collect.Multimap;
+import com.google.common.collect.Ordering;
 import com.google.common.collect.Sets;
 import com.google.common.reflect.TypeToken;
 
@@ -65,16 +62,14 @@ public class CloudLocation extends AbstractLocation implements MachineProvisioni
     private Object mutex;
 
     @SetFromFlag("owner")
-    private CloudEnvironment infrastructure;
+    private CloudEnvironment environment;
 
     @SetFromFlag("provisioner")
     private MachineProvisioningLocation<SshMachineLocation> provisioner;
 
     /* Mappings for provisioned locations */
 
-    private final Set<SshMachineLocation> obtained = Sets.newHashSet();
-    private final Multimap<SshMachineLocation, String> machines = HashMultimap.create();
-    private final Map<String, SshMachineLocation> containers = Maps.newHashMap();
+    private final Set<MachineLocation> obtained = Sets.newHashSet();
 
     public CloudLocation() {
         this(Maps.newLinkedHashMap());
@@ -109,25 +104,35 @@ public class CloudLocation extends AbstractLocation implements MachineProvisioni
         synchronized (mutex) {
             // Check context for entity being deployed
             Object context = flags.get(LocationConfigKeys.CALLER_CONTEXT.getName());
-            if (!(context instanceof Entity)) {
+            if (context != null && !(context instanceof Entity)) {
                 throw new IllegalStateException("Invalid location context: " + context);
             }
             Entity entity = (Entity) context;
 
             // Look for idle CloudMachine first
-            getOwner().getCloudMachineList()
+            Set<Entity> idle = Sets.newTreeSet(new Ordering<Entity>() {
+                @Override
+                public int compare(@Nullable Entity left, @Nullable Entity right) {
+                    return ComparisonChain.start()
+                            .compare(left.getAttribute(MachineEntity.CPU_USAGE), right.getAttribute(MachineEntity.CPU_USAGE))
+                            .result();
+                }
+            });
+            for (Entity e : getOwner().getCloudMachineList()) {
+                if (Boolean.TRUE.equals(e.getAttribute(CloudMachine.SERVICE_UP)) && e.getAttribute(CloudMachine.ENTITY) == null) {
+                    idle.add(e);
+                }
+            }
+            if (idle.size() > 0) {
+                CloudMachineLocation machine = (CloudMachineLocation) Iterables.getLast(idle);
+                machine.setEntity(entity);
+                return machine;
+            }
 
             // Obtain a new machine location
             MachineLocation machine = provisioner.obtain(flags);
+            obtained.add(machine);
 
-            Maybe<SshMachineLocation> deployed = Machines.findUniqueSshMachineLocation(dockerHost.getLocations());
-            if (deployed.isPresent()) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Storing container mapping {} to {}", deployed.get(), machine.getId());
-                }
-                machines.put(machine, dockerHost.getId());
-                containers.put(container.getId(), deployed.get());
-            }
             return machine;
         }
     }
@@ -141,30 +146,13 @@ public class CloudLocation extends AbstractLocation implements MachineProvisioni
     public void release(MachineLocation machine) {
         if (provisioner != null) {
             synchronized (mutex) {
-                String id = machine.getId();
-                SshMachineLocation ssh = containers.remove(id);
-                if (ssh != null) {
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug("Request to remove container mapping {} to {}", ssh, id);
-                    }
-                    if (machines.remove(ssh, id)) {
-                        if (machines.get(ssh).isEmpty()) {
-                            if (LOG.isDebugEnabled()) {
-                                LOG.debug("Empty Docker host at {}", ssh);
-                            }
-                        }
-                    } else {
-                        throw new IllegalArgumentException("Request to release "+machine+", but container mapping not found");
-                    }
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Request to release machine {}", machine);
+                }
+                if (obtained.remove(machine)) {
+                    provisioner.release((SshMachineLocation) machine);
                 } else {
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug("Request to release machine {}", machine);
-                    }
-                    if (obtained.remove(machine)) {
-                        provisioner.release((SshMachineLocation) machine);
-                    } else {
-                        throw new IllegalArgumentException("Request to release "+machine+", but this machine is not currently allocated");
-                    }
+                    throw new IllegalArgumentException("Request to release "+machine+", but this machine is not currently allocated");
                 }
             }
         } else {
@@ -177,30 +165,17 @@ public class CloudLocation extends AbstractLocation implements MachineProvisioni
         return Maps.newLinkedHashMap();
     }
 
-    public List<Entity> getDockerContainerList() {
-        return infrastructure.getDockerContainerList();
-    }
-
-    public List<Entity> getDockerHostList() {
-        return infrastructure.getDockerHostList();
-    }
-
-    public CloudEnvironment getDockerInfrastructure() {
-        return infrastructure;
-    }
-
     @Override
     public ToStringHelper string() {
         return super.string()
                 .omitNullValues()
                 .add("provisioner", provisioner)
-                .add("infrastructure", infrastructure)
-                .add("strategy", strategy);
+                .add("environment", environment);
     }
 
     @Override
     public CloudEnvironment getOwner() {
-        return infrastructure;
+        return environment;
     }
 
 }

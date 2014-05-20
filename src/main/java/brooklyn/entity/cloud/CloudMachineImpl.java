@@ -15,73 +15,50 @@
  */
 package brooklyn.entity.cloud;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
-import io.cloudsoft.networking.portforwarding.DockerPortForwarder;
-import io.cloudsoft.networking.subnet.PortForwarder;
-import io.cloudsoft.networking.subnet.SubnetTier;
-import io.cloudsoft.networking.subnet.SubnetTierImpl;
 
-import java.net.URI;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Callable;
 
-import org.jclouds.compute.domain.OsFamily;
+import javax.annotation.Nullable;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import brooklyn.enricher.Enrichers;
 import brooklyn.entity.Entity;
-import brooklyn.entity.annotation.EffectorParam;
-import brooklyn.entity.basic.AbstractEntity;
 import brooklyn.entity.basic.BasicStartableImpl;
-import brooklyn.entity.basic.Entities;
-import brooklyn.entity.basic.EntityLocal;
-import brooklyn.entity.basic.SoftwareProcessImpl;
-import brooklyn.entity.effector.Effectors;
-import brooklyn.entity.group.Cluster;
-import brooklyn.entity.group.DynamicCluster;
-import brooklyn.entity.proxying.EntitySpec;
-import brooklyn.entity.trait.Startable;
-import brooklyn.entity.trait.StartableMethods;
+import brooklyn.entity.software.SshEffectorTasks;
+import brooklyn.event.feed.function.FunctionFeed;
+import brooklyn.event.feed.function.FunctionPollConfig;
 import brooklyn.location.Location;
 import brooklyn.location.LocationDefinition;
-import brooklyn.location.MachineProvisioningLocation;
-import brooklyn.location.access.PortForwardManager;
 import brooklyn.location.basic.BasicLocationDefinition;
 import brooklyn.location.basic.Machines;
 import brooklyn.location.basic.SshMachineLocation;
-import brooklyn.location.cloud.CloudMachineLocation;
 import brooklyn.location.cloud.CloudLocation;
+import brooklyn.location.cloud.CloudMachineLocation;
 import brooklyn.location.cloud.CloudResolver;
 import brooklyn.location.jclouds.JcloudsLocation;
-import brooklyn.location.jclouds.JcloudsLocationConfig;
-import brooklyn.location.jclouds.templates.PortableTemplateBuilder;
 import brooklyn.management.LocationManager;
-import brooklyn.policy.PolicySpec;
-import brooklyn.policy.ha.ServiceFailureDetector;
-import brooklyn.policy.ha.ServiceReplacer;
-import brooklyn.policy.ha.ServiceRestarter;
 import brooklyn.util.collections.MutableMap;
 import brooklyn.util.guava.Maybe;
-import brooklyn.util.net.Cidr;
+import brooklyn.util.task.DynamicTasks;
+import brooklyn.util.task.ssh.SshTasks;
+import brooklyn.util.task.system.ProcessTaskWrapper;
+import brooklyn.util.text.Strings;
+import brooklyn.util.time.Duration;
 
+import com.google.common.base.Function;
+import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 
-/**
- * @author Andrea Turli
- */
-public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine, Startable {
+public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine {
 
     private static final Logger log = LoggerFactory.getLogger(CloudMachineImpl.class);
 
-    private JcloudsLocation jcloudsLocation;
-
-    public CloudMachineImpl() {
-    }
+    private transient JcloudsLocation jcloudsLocation;
+    private transient FunctionFeed sensorFeed;
 
     @Override
     public void init() {
@@ -89,9 +66,43 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
     }
 
     protected void connectSensors() {
+        sensorFeed = FunctionFeed.builder()
+                .entity(this)
+                .period(Duration.TEN_SECONDS)
+                .poll(new FunctionPollConfig<Boolean, Boolean>(CloudMachine.SSH_AVAILABLE)
+                        .callable(new Callable<Boolean>() {
+                                @Override
+                                public Boolean call() throws Exception {
+                                    return getSshMachine().isSshable();
+                                }
+                        }))
+                .poll(new FunctionPollConfig<String, Double>(CloudMachine.CPU_USAGE)
+                        .callable(new Callable<String>() {
+                                @Override
+                                public String call() throws Exception {
+                                    ProcessTaskWrapper<Integer> task = SshEffectorTasks.ssh(ImmutableList.of("uptime"))
+                                            .machine(getSshMachine())
+                                            .requiringExitCodeZero()
+                                            .summary("cpuUsage")
+                                            .newTask();
+                                    DynamicTasks.queueIfPossible(task).orSubmitAsync(CloudMachineImpl.this);
+                                    return task.block().getStdout();
+                                }
+                            })
+                        .onFailureOrException(Functions.constant(0d))
+                        .onSuccess(new Function<String, Double>() {
+                                @Override
+                                public Double apply(@Nullable String input) {
+                                    log.info("Uptime: {}", input);
+                                    // TODO parse uptime output
+                                    return 1d;
+                                }
+                            }))
+                .build();
     }
 
     protected void disconnectSensors() {
+        if (sensorFeed != null) sensorFeed.stop();
     }
 
     @Override
@@ -100,8 +111,8 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
     }
 
     @Override
-    public CloudEnvironment getInfrastructure() {
-        return getConfig(DOCKER_INFRASTRUCTURE);
+    public CloudEnvironment getEnvironment() {
+        return getConfig(CLOUD_ENVIRONMENT);
     }
 
     @Override
@@ -115,7 +126,7 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
     @Override
     public CloudMachineLocation createLocation(Map<String, ?> flags) {
         String locationSpec, locationName;
-        CloudEnvironment infrastructure = getConfig(DOCKER_INFRASTRUCTURE);
+        CloudEnvironment infrastructure = getConfig(CLOUD_ENVIRONMENT);
         CloudLocation docker = infrastructure.getDynamicLocation();
         locationName = docker.getId() + "-" + getId();
 
@@ -131,7 +142,7 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
             getManagementContext().getLocationRegistry().updateDefinedLocation(definition);
         }
 
-        log.info("New Docker host location {} created", location);
+        log.info("New cloud machine location {} created", location);
         return (CloudMachineLocation) location;
     }
 
@@ -146,7 +157,29 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
     }
 
     @Override
+    public Entity getRunningEntity() {
+        return getAttribute(ENTITY);
+    }
+
+    @Override
+    public void setRunningEntity(Entity entity) {
+        setAttribute(ENTITY, entity);
+    }
+
+    @Override
+    public SshMachineLocation getSshMachine() {
+        return getAttribute(SSH_MACHINE);
+    }
+
+    @Override
+    public boolean isSshable() {
+        return getAttribute(SSH_AVAILABLE);
+    }
+
+    @Override
     public void start(Collection<? extends Location> locations) {
+        setAttribute(SERVICE_UP, Boolean.FALSE);
+
         super.start(locations);
 
         Maybe<SshMachineLocation> found = Machines.findUniqueSshMachineLocation(getLocations());
@@ -157,10 +190,21 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
                 .build();
 
         createLocation(flags);
+
+        setAttribute(SSH_MACHINE, getDynamicLocation().getMachine());
+
+        connectSensors();
+
+        setAttribute(SERVICE_UP, Boolean.TRUE);
     }
 
     @Override
     public void stop() {
+        setAttribute(SERVICE_UP, Boolean.FALSE);
+        setAttribute(SSH_MACHINE, null);
+
+        disconnectSensors();
+
         deleteLocation();
 
         super.stop();

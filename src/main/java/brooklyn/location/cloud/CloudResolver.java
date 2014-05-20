@@ -91,7 +91,7 @@ public class CloudResolver implements EnableableLocationResolver {
 
         Matcher matcher = PATTERN.matcher(spec);
         if (!matcher.matches()) {
-            throw new IllegalArgumentException("Invalid location '"+spec+"'; must specify something like docker:entityId or docker:entityId:(name=abc)");
+            throw new IllegalArgumentException("Invalid location '"+spec+"'; must specify something like cloud:environmentId or cloud:environmentId:(name=abc)");
         }
 
         String argsPart = matcher.group(6);
@@ -115,7 +115,7 @@ public class CloudResolver implements EnableableLocationResolver {
 
         String environmentId = matcher.group(2);
         if (Strings.isBlank(environmentId)) {
-            throw new IllegalArgumentException("Invalid location '"+spec+"'; infrastructure entity id must be non-empty");
+            throw new IllegalArgumentException("Invalid location '"+spec+"'; environment entity id must be non-empty");
         }
         String machineId = matcher.group(4);
 

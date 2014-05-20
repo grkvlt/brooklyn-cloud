@@ -20,23 +20,27 @@ import brooklyn.entity.Entity;
 import brooklyn.entity.basic.ConfigKeys;
 import brooklyn.entity.proxying.ImplementedBy;
 import brooklyn.entity.trait.HasShortName;
+import brooklyn.event.AttributeSensor;
 import brooklyn.location.cloud.CloudMachineLocation;
 import brooklyn.location.dynamic.LocationOwner;
 import brooklyn.location.jclouds.JcloudsLocation;
 import brooklyn.util.flags.SetFromFlag;
 
 @ImplementedBy(CloudMachineImpl.class)
-public interface CloudMachine extends Entity, HasShortName, LocationOwner<CloudMachineLocation, CloudMachine> {
+public interface CloudMachine extends MachineEntity, HasShortName, LocationOwner<CloudMachineLocation, CloudMachine> {
 
-    @SetFromFlag("infrastructure")
-    ConfigKey<CloudEnvironment> DOCKER_INFRASTRUCTURE = ConfigKeys.newConfigKey(CloudEnvironment.class,
-            "docker.infrastructure", "The parent Docker infrastructure");
+    @SetFromFlag("environment")
+    ConfigKey<CloudEnvironment> CLOUD_ENVIRONMENT = ConfigKeys.newConfigKey(CloudEnvironment.class,
+            "cloud.environment", "The parent cloud environment");
+
+    AttributeSensor<Entity> ENTITY = CloudAttributes.ENTITY;
 
     JcloudsLocation getJcloudsLocation();
 
-    CloudEnvironment getInfrastructure();
+    CloudEnvironment getEnvironment();
 
     Entity getRunningEntity();
+
     void setRunningEntity(Entity entity);
 
 }

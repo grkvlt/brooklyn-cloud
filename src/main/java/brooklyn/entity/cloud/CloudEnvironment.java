@@ -27,12 +27,22 @@ import brooklyn.entity.proxying.ImplementedBy;
 import brooklyn.entity.trait.Resizable;
 import brooklyn.event.AttributeSensor;
 import brooklyn.event.basic.BasicAttributeSensorAndConfigKey;
+import brooklyn.location.LocationSpec;
+import brooklyn.location.basic.LocalhostMachineProvisioningLocation;
 import brooklyn.location.cloud.CloudLocation;
 import brooklyn.location.dynamic.LocationOwner;
+import brooklyn.location.jclouds.JcloudsLocationConfig;
 import brooklyn.util.flags.SetFromFlag;
 
 @ImplementedBy(CloudEnvironmentImpl.class)
 public interface CloudEnvironment extends BasicStartable, Resizable, LocationOwner<CloudLocation, CloudEnvironment> {
+
+    @SetFromFlag("securityGroup")
+    ConfigKey<String> SECURITY_GROUP = ConfigKeys.newStringConfigKey(
+            "cloud.machine.securityGroup", "Set a network security group for cloud servers to use; (null to use default configuration)");
+
+    @SetFromFlag("openIptables")
+    ConfigKey<Boolean> OPEN_IPTABLES = ConfigKeys.newConfigKeyWithPrefix("cloud.machine.", JcloudsLocationConfig.OPEN_IPTABLES);
 
     @SetFromFlag("initialSize")
     ConfigKey<Integer> CLOUD_MACHINE_CLUSTER_MIN_SIZE = ConfigKeys.newConfigKeyWithPrefix("cloud.machine.", DynamicCluster.INITIAL_SIZE);
@@ -41,11 +51,15 @@ public interface CloudEnvironment extends BasicStartable, Resizable, LocationOwn
     ConfigKey<Boolean> REGISTER_CLOUD_MACHINE_LOCATIONS = ConfigKeys.newBooleanConfigKey("cloud.machine.register",
             "Register new cloud machine locations for deployment", Boolean.FALSE);
 
+    @SetFromFlag("cloudSpec")
+    BasicAttributeSensorAndConfigKey<LocationSpec> CLOUD_LOCATION_SPEC = new BasicAttributeSensorAndConfigKey<LocationSpec>(
+            LocationSpec.class, "cloud.location.spec", "Specification to use for the cloud environment",
+            LocationSpec.create(LocalhostMachineProvisioningLocation.class));
+
     @SetFromFlag("machineSpec")
     BasicAttributeSensorAndConfigKey<EntitySpec> CLOUD_MACHINE_SPEC = new BasicAttributeSensorAndConfigKey<EntitySpec>(
-            EntitySpec.class, "cloud.machine.spec", "Specification to use when creating child Docker Hosts",
+            EntitySpec.class, "cloud.machine.spec", "Specification to use when creating cloud machines",
             EntitySpec.create(CloudMachine.class));
-
 
     AttributeSensor<Integer> CLOUD_MACHINE_COUNT = CloudAttributes.CLOUD_MACHINE_COUNT;
     AttributeSensor<Integer> CLOUD_MACHINE_IDLE_COUNT = CloudAttributes.CLOUD_MACHINE_IDLE_COUNT;

@@ -30,18 +30,19 @@ import brooklyn.entity.basic.BasicStartableImpl;
 import brooklyn.entity.basic.Entities;
 import brooklyn.entity.basic.SoftwareProcess;
 import brooklyn.entity.basic.SoftwareProcess.ChildStartableMode;
-import brooklyn.entity.container.docker.DockerInfrastructure;
 import brooklyn.entity.group.Cluster;
 import brooklyn.entity.group.DynamicCluster;
 import brooklyn.entity.group.DynamicMultiGroup;
 import brooklyn.entity.proxying.EntitySpec;
 import brooklyn.location.Location;
 import brooklyn.location.LocationDefinition;
+import brooklyn.location.LocationSpec;
+import brooklyn.location.MachineProvisioningLocation;
 import brooklyn.location.basic.BasicLocationDefinition;
+import brooklyn.location.basic.LocalhostMachineProvisioningLocation;
 import brooklyn.location.cloud.CloudLocation;
 import brooklyn.location.cloud.CloudMachineLocation;
 import brooklyn.location.cloud.CloudResolver;
-import brooklyn.location.docker.DockerHostLocation;
 import brooklyn.management.LocationManager;
 import brooklyn.util.collections.MutableMap;
 
@@ -66,7 +67,7 @@ public class CloudEnvironmentImpl extends BasicStartableImpl implements CloudEnv
             Optional<Location> lookup = Iterables.tryFind(input.getLocations(), Predicates.instanceOf(CloudMachineLocation.class));
             if (lookup.isPresent()) {
                 CloudMachineLocation machine = (CloudMachineLocation) lookup.get();
-                return getId().equals(machine.getOwner().getInfrastructure().getId());
+                return getId().equals(machine.getOwner().getEnvironment().getId());
             } else {
                 return false;
             }
@@ -77,7 +78,7 @@ public class CloudEnvironmentImpl extends BasicStartableImpl implements CloudEnv
     public void init() {
         int initialSize = getConfig(CLOUD_MACHINE_CLUSTER_MIN_SIZE);
         EntitySpec<?> dockerHostSpec = EntitySpec.create(getConfig(CLOUD_MACHINE_SPEC))
-                .configure(CloudMachine.DOCKER_INFRASTRUCTURE, this)
+                .configure(CloudMachine.CLOUD_ENVIRONMENT, this)
                 .configure(SoftwareProcess.CHILDREN_STARTABLE_MODE, ChildStartableMode.BACKGROUND_LATE);
 
         machines = addChild(EntitySpec.create(DynamicCluster.class)
@@ -176,7 +177,17 @@ public class CloudEnvironmentImpl extends BasicStartableImpl implements CloudEnv
 
     @Override
     public void start(Collection<? extends Location> locations) {
-        Location provisioner = Iterables.getOnlyElement(locations);
+        Optional<? extends Location> location = Optional.absent();
+        if (Iterables.size(locations) > 0) {
+            location = Iterables.tryFind(locations, Predicates.instanceOf(MachineProvisioningLocation.class));
+        }
+        Location provisioner;
+        if (!location.isPresent() || location.get() instanceof LocalhostMachineProvisioningLocation) {
+            LocationSpec<?> spec = getConfig(CLOUD_LOCATION_SPEC);
+            provisioner = getManagementContext().getLocationManager().createLocation(spec);
+        } else {
+            provisioner = location.get();
+        }
         log.info("Creating new CloudLocation wrapping {}", provisioner);
 
         Map<String, ?> flags = MutableMap.<String, Object>builder()

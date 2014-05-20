@@ -16,16 +16,23 @@
 package brooklyn.entity.cloud;
 
 import brooklyn.entity.Entity;
+import brooklyn.entity.trait.Startable;
 import brooklyn.event.AttributeSensor;
 import brooklyn.event.basic.Sensors;
+import brooklyn.location.basic.SshMachineLocation;
 
-public interface CloudAttributes {
+public interface MachineEntity extends Entity, Startable {
 
-    AttributeSensor<Entity> ENTITY = Sensors.newSensor(Entity.class, "cloud.machine.entity", "The entity running in this machine");
+    AttributeSensor<Boolean> SSH_AVAILABLE = Sensors.newBooleanSensor("machine.sshable", "Is the machine accessible over SSH");
 
-    AttributeSensor<Double> CPU_USAGE = Sensors.newDoubleSensor("cloud.cpuUsage", "Current CPU usage");
-    AttributeSensor<Double> AVERAGE_CPU_USAGE = Sensors.newDoubleSensor("cloud.cpuUsage.average", "Average CPU usage");
+    AttributeSensor<Double> CPU_USAGE = Sensors.newDoubleSensor("machine.cpuUsage", "The machine CPU usage");
 
-    AttributeSensor<Integer> CLOUD_MACHINE_COUNT = Sensors.newIntegerSensor("cloud.machine.count", "Number of cloud machines");
-    AttributeSensor<Integer> CLOUD_MACHINE_IDLE_COUNT = Sensors.newIntegerSensor("cloud.machine.idleCount", "Number of idle cloud machines");
+    AttributeSensor<SshMachineLocation> SSH_MACHINE = Sensors.newSensor(SshMachineLocation.class, "machine.sshMachineLocation", "The SSHable machine");
+
+    AttributeSensor<String> OPERATING_SYSTEM = Sensors.newStringSensor("machine.os", "The machine operating system");
+
+    SshMachineLocation getSshMachine();
+
+    boolean isSshable();
+
 }
