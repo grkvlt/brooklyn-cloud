@@ -149,6 +149,11 @@ public class CloudEnvironmentImpl extends BasicStartableImpl implements CloudEnv
     }
 
     @Override
+    public boolean isLocationAvailable() {
+        return getDynamicLocation() != null;
+    }
+
+    @Override
     public CloudLocation createLocation(Map<String, ?> flags) {
         String locationName = getConfig(LOCATION_NAME);
         if (locationName == null) {
@@ -171,8 +176,18 @@ public class CloudEnvironmentImpl extends BasicStartableImpl implements CloudEnv
     }
 
     @Override
-    public boolean isLocationAvailable() {
-        return getDynamicLocation() != null;
+    public void deleteLocation() {
+        CloudLocation location = getDynamicLocation();
+
+        if (location != null) {
+            LocationManager mgr = getManagementContext().getLocationManager();
+            if (mgr.isManaged(location)) {
+                mgr.unmanage(location);
+            }
+        }
+
+        setAttribute(DYNAMIC_LOCATION, null);
+        setAttribute(LOCATION_NAME, null);
     }
 
     @Override
@@ -206,21 +221,6 @@ public class CloudEnvironmentImpl extends BasicStartableImpl implements CloudEnv
         super.stop();
 
         deleteLocation();
-    }
-
-    @Override
-    public void deleteLocation() {
-        CloudLocation location = getDynamicLocation();
-
-        if (location != null) {
-            LocationManager mgr = getManagementContext().getLocationManager();
-            if (mgr.isManaged(location)) {
-                mgr.unmanage(location);
-            }
-        }
-
-        setAttribute(DYNAMIC_LOCATION, null);
-        setAttribute(LOCATION_NAME, null);
     }
 
 }

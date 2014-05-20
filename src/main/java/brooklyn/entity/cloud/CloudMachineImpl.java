@@ -44,9 +44,7 @@ import brooklyn.management.LocationManager;
 import brooklyn.util.collections.MutableMap;
 import brooklyn.util.guava.Maybe;
 import brooklyn.util.task.DynamicTasks;
-import brooklyn.util.task.ssh.SshTasks;
 import brooklyn.util.task.system.ProcessTaskWrapper;
-import brooklyn.util.text.Strings;
 import brooklyn.util.time.Duration;
 
 import com.google.common.base.Function;
@@ -120,32 +118,6 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
         return (CloudMachineLocation) getAttribute(DYNAMIC_LOCATION);
     }
 
-    /**
-     * Create a new {@link CloudMachineLocation} wrapping the machine we are starting in.
-     */
-    @Override
-    public CloudMachineLocation createLocation(Map<String, ?> flags) {
-        String locationSpec, locationName;
-        CloudEnvironment infrastructure = getConfig(CLOUD_ENVIRONMENT);
-        CloudLocation docker = infrastructure.getDynamicLocation();
-        locationName = docker.getId() + "-" + getId();
-
-        locationSpec = format(CloudResolver.CLOUD_MACHINE_SPEC, infrastructure.getId(), getId()) + format(":(name=\"%s\")", locationName);
-        setAttribute(LOCATION_SPEC, locationSpec);
-        LocationDefinition definition = new BasicLocationDefinition(locationName, locationSpec, flags);
-        Location location = getManagementContext().getLocationRegistry().resolve(definition);
-        getManagementContext().getLocationManager().manage(location);
-
-        setAttribute(DYNAMIC_LOCATION, location);
-        setAttribute(LOCATION_NAME, location.getId());
-        if (getConfig(CloudEnvironment.REGISTER_CLOUD_MACHINE_LOCATIONS)) {
-            getManagementContext().getLocationRegistry().updateDefinedLocation(definition);
-        }
-
-        log.info("New cloud machine location {} created", location);
-        return (CloudMachineLocation) location;
-    }
-
     @Override
     public boolean isLocationAvailable() {
         return getDynamicLocation() != null;
@@ -176,38 +148,30 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
         return getAttribute(SSH_AVAILABLE);
     }
 
+    /**
+     * Create a new {@link CloudMachineLocation} wrapping the machine we are starting in.
+     */
     @Override
-    public void start(Collection<? extends Location> locations) {
-        setAttribute(SERVICE_UP, Boolean.FALSE);
+    public CloudMachineLocation createLocation(Map<String, ?> flags) {
+        String locationSpec, locationName;
+        CloudEnvironment infrastructure = getConfig(CLOUD_ENVIRONMENT);
+        CloudLocation docker = infrastructure.getDynamicLocation();
+        locationName = docker.getId() + "-" + getId();
 
-        super.start(locations);
+        locationSpec = format(CloudResolver.CLOUD_MACHINE_SPEC, infrastructure.getId(), getId()) + format(":(name=\"%s\")", locationName);
+        setAttribute(LOCATION_SPEC, locationSpec);
+        LocationDefinition definition = new BasicLocationDefinition(locationName, locationSpec, flags);
+        Location location = getManagementContext().getLocationRegistry().resolve(definition);
+        getManagementContext().getLocationManager().manage(location);
 
-        Maybe<SshMachineLocation> found = Machines.findUniqueSshMachineLocation(getLocations());
+        setAttribute(DYNAMIC_LOCATION, location);
+        setAttribute(LOCATION_NAME, location.getId());
+        if (getConfig(CloudEnvironment.REGISTER_CLOUD_MACHINE_LOCATIONS)) {
+            getManagementContext().getLocationRegistry().updateDefinedLocation(definition);
+        }
 
-        Map<String, ?> flags = MutableMap.<String, Object>builder()
-                .putAll(getConfig(LOCATION_FLAGS))
-                .put("machine", found.get())
-                .build();
-
-        createLocation(flags);
-
-        setAttribute(SSH_MACHINE, getDynamicLocation().getMachine());
-
-        connectSensors();
-
-        setAttribute(SERVICE_UP, Boolean.TRUE);
-    }
-
-    @Override
-    public void stop() {
-        setAttribute(SERVICE_UP, Boolean.FALSE);
-        setAttribute(SSH_MACHINE, null);
-
-        disconnectSensors();
-
-        deleteLocation();
-
-        super.stop();
+        log.info("New cloud machine location {} created", location);
+        return (CloudMachineLocation) location;
     }
 
     @Override
@@ -223,7 +187,43 @@ public class CloudMachineImpl extends BasicStartableImpl implements CloudMachine
                 getManagementContext().getLocationRegistry().removeDefinedLocation(host.getId());
             }
         }
+
         setAttribute(DYNAMIC_LOCATION, null);
         setAttribute(LOCATION_NAME, null);
     }
+
+    @Override
+    public void start(Collection<? extends Location> locations) {
+        setAttribute(SERVICE_UP, Boolean.FALSE);
+
+        Maybe<SshMachineLocation> found = Machines.findUniqueSshMachineLocation(locations);
+
+        Map<String, ?> flags = MutableMap.<String, Object>builder()
+                .putAll(getConfig(LOCATION_FLAGS))
+                .put("machine", found.get())
+                .build();
+        createLocation(flags);
+
+        setAttribute(SSH_MACHINE, getDynamicLocation().getMachine());
+
+        connectSensors();
+
+        super.start(locations);
+
+        setAttribute(SERVICE_UP, Boolean.TRUE);
+    }
+
+    @Override
+    public void stop() {
+        setAttribute(SERVICE_UP, Boolean.FALSE);
+
+        super.stop();
+
+        disconnectSensors();
+
+        setAttribute(SSH_MACHINE, null);
+
+        deleteLocation();
+    }
+
 }
